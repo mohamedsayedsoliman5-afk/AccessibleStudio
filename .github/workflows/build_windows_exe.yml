@@ -60,13 +60,22 @@ jobs:
         run: |
           pyinstaller --noconfirm --onedir --windowed `
             --name "AccessibleStudio" `
-            --collect-all "accessible_studio" `
-            --collect-all "tkinter" `
-            --collect-all "cytolk" `
+            --collect-all "pygame" `
+            --collect-all "numpy" `
+            --collect-all "mido" `
             --collect-all "pyttsx3" `
             --collect-all "comtypes" `
-            --hidden-import "mido" `
-            --hidden-import "tkinter" `
+            --hidden-import "speech_engine" `
+            --hidden-import "synth_engine" `
+            --hidden-import "keyboard_mapper" `
+            --hidden-import "sequencer" `
+            --hidden-import "step_sequencer" `
+            --hidden-import "exporter" `
+            --hidden-import "ui_renderer" `
+            --hidden-import "config" `
+            --hidden-import "win32com.client" `
+            --hidden-import "comtypes.client" `
+            --hidden-import "fluidsynth" `
             main.py
 
       - name: Package Portable ZIP Distribution
