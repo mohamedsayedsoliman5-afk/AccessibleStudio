@@ -27,25 +27,38 @@ class SpeechEngine:
         self._cmd_queue = queue.Queue()
         self._running = True
 
-        try:
-            from cytolk import tolk
-            tolk.load()
-            if tolk.detect_screen_reader():
-                self._tolk = tolk
-            else:
-                tolk.unload()
-        except Exception:
-            self._tolk = None
-
-        if self._tolk is None and sys.platform == "win32":
-            for dll_name in ("nvdaControllerClient64.dll", "nvdaControllerClient32.dll"):
+        app_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+        if sys.platform == "win32":
+            candidates = [
+                os.path.join(app_dir, "nvdaControllerClient64.dll"),
+                os.path.join(app_dir, "nvdaControllerClient32.dll"),
+                "nvdaControllerClient64.dll",
+                "nvdaControllerClient32.dll",
+            ]
+            for dll_path in candidates:
                 try:
-                    dll = ctypes.windll.LoadLibrary(dll_name)
+                    dll = ctypes.windll.LoadLibrary(dll_path)
+                    dll.nvdaController_testIfRunning.restype = ctypes.c_long
                     if dll.nvdaController_testIfRunning() == 0:
+                        dll.nvdaController_speakText.argtypes = [ctypes.c_wchar_p]
+                        dll.nvdaController_speakText.restype = ctypes.c_long
+                        dll.nvdaController_cancelSpeech.restype = ctypes.c_long
                         self._nvda_dll = dll
+                        print(f"[SpeechEngine] Connected directly to running NVDA via {os.path.basename(dll_path)}")
                         break
                 except Exception:
                     pass
+
+        if self._nvda_dll is None:
+            try:
+                from cytolk import tolk
+                tolk.load()
+                if tolk.detect_screen_reader():
+                    self._tolk = tolk
+                else:
+                    tolk.unload()
+            except Exception:
+                self._tolk = None
 
         self._ready_event = threading.Event()
         self._worker = threading.Thread(target=self._speech_worker, daemon=True)
@@ -284,18 +297,18 @@ class SpeechEngine:
         print(f"[TTS: {self.preferred_voice_name}] {text}")
 
         if self.use_screen_reader_first:
-            if self._tolk is not None:
-                try:
-                    self._tolk.output(text, interrupt=interrupt)
-                    return
-                except Exception:
-                    pass
-
             if self._nvda_dll is not None:
                 try:
                     if interrupt:
                         self._nvda_dll.nvdaController_cancelSpeech()
-                    self._nvda_dll.nvdaController_speakText(ctypes.c_wchar_p(text))
+                    self._nvda_dll.nvdaController_speakText(ctypes.c_wchar_p(str(text)))
+                    return
+                except Exception:
+                    pass
+
+            if self._tolk is not None:
+                try:
+                    self._tolk.output(text, interrupt=interrupt)
                     return
                 except Exception:
                     pass
