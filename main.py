@@ -20,7 +20,8 @@ from config import (
     DEFAULT_OCTAVE,
     DEFAULT_VELOCITY,
     MAX_TRACKS,
-    GM_INSTRUMENTS
+    GM_INSTRUMENTS,
+    get_note_name
 )
 from speech_engine import speech
 from synth_engine import SynthEngine
@@ -91,6 +92,289 @@ except Exception as err:
     pygame = _DummyPygame()
 
 from exporter import ProjectExporter
+
+
+# ---------------------------------------------------------------------------
+# Accessible Native Desktop Tkinter GUI Window
+# ---------------------------------------------------------------------------
+class AccessibleDAWTkinterWindow:
+    """
+    High-Contrast Native Desktop GUI Window built with Python standard Tkinter.
+    Guaranteed zero-dependency desktop UI on any Windows machine.
+    Provides clear visual status cards (Track, Instrument, BPM, Bar/Beat, Metronome,
+    Shortcuts) for sighted teachers/collaborators and full keyboard hook for NVDA/JAWS.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.root = None
+        self._is_active = True
+        self.track_cards = []
+        self._status_var = None
+        self._pos_var = None
+        self._mixer_var = None
+        self._note_var = None
+        self._mode_var = None
+
+    def start(self):
+        import tkinter as tk
+
+        self.root = tk.Tk()
+        self.root.title("Accessible Mini-DAW Studio | استوديو الألحان الميسر للمكفوفين")
+        self.root.geometry("880x640")
+        self.root.minsize(780, 520)
+        self.root.configure(bg="#0B132B")
+
+        # Top Header Banner
+        header_frame = tk.Frame(self.root, bg="#1C2541", pady=10, padx=15)
+        header_frame.pack(fill=tk.X, padx=12, pady=(10, 5))
+
+        title_lbl = tk.Label(
+            header_frame,
+            text="Accessible Mini-DAW Studio | استوديو الألحان الميسر للمكفوفين",
+            font=("Arial", 16, "bold"),
+            fg="#F0B90B",
+            bg="#1C2541"
+        )
+        title_lbl.pack(anchor="w")
+
+        sub_lbl = tk.Label(
+            header_frame,
+            text="Screen-Reader First Architecture | Native NVDA / JAWS / SAPI Audio Feedback",
+            font=("Arial", 10),
+            fg="#58A6FF",
+            bg="#1C2541"
+        )
+        sub_lbl.pack(anchor="w")
+
+        # Main Status Card
+        card_frame = tk.Frame(self.root, bg="#161B22", relief=tk.RIDGE, bd=2, padx=15, pady=12)
+        card_frame.pack(fill=tk.X, padx=12, pady=5)
+
+        self._status_var = tk.StringVar(value="المسار 1: بيانو صوتي كبير | Track 1: Acoustic Grand Piano")
+        status_lbl = tk.Label(
+            card_frame,
+            textvariable=self._status_var,
+            font=("Arial", 14, "bold"),
+            fg="#FFFFFF",
+            bg="#161B22"
+        )
+        status_lbl.pack(anchor="w", pady=(0, 4))
+
+        self._pos_var = tk.StringVar(value="السرعة: 120 BPM | المازورة: 1 | النبضة: 1 | الأوكتاف: 4 | الشدة: 100")
+        pos_lbl = tk.Label(
+            card_frame,
+            textvariable=self._pos_var,
+            font=("Arial", 11),
+            fg="#58A6FF",
+            bg="#161B22"
+        )
+        pos_lbl.pack(anchor="w", pady=(0, 4))
+
+        self._mixer_var = tk.StringVar(value="مستوى الصوت: 100% | التوزيع: في المنتصف | المترونوم: معطّل")
+        mixer_lbl = tk.Label(
+            card_frame,
+            textvariable=self._mixer_var,
+            font=("Arial", 11),
+            fg="#8B949E",
+            bg="#161B22"
+        )
+        mixer_lbl.pack(anchor="w", pady=(0, 4))
+
+        self._mode_var = tk.StringVar(value="الحالة: متوقف | النمط: عزف مباشر (اضغط R للتسجيل)")
+        mode_lbl = tk.Label(
+            card_frame,
+            textvariable=self._mode_var,
+            font=("Arial", 11, "bold"),
+            fg="#F0B90B",
+            bg="#161B22"
+        )
+        mode_lbl.pack(anchor="w")
+
+        # Live Real-Time Note Feedback Display
+        note_frame = tk.Frame(self.root, bg="#0D1117", relief=tk.SOLID, bd=1, padx=12, pady=8)
+        note_frame.pack(fill=tk.X, padx=12, pady=5)
+
+        self._note_var = tk.StringVar(value="العزف المباشر: جاهز | مفاتيح البيانو: Z S X D C V G B H N J M و Q 2 W 3 E R 5 T 6 Y 7 U I")
+        note_lbl = tk.Label(
+            note_frame,
+            textvariable=self._note_var,
+            font=("Arial", 12, "bold"),
+            fg="#3FB950",
+            bg="#0D1117"
+        )
+        note_lbl.pack(anchor="w")
+
+        # 8 Tracks Visual Grid
+        tracks_container = tk.Frame(self.root, bg="#0B132B")
+        tracks_container.pack(fill=tk.X, padx=12, pady=5)
+
+        self.track_cards = []
+        for i in range(8):
+            tf = tk.Frame(tracks_container, bg="#1C2541", relief=tk.RAISED, bd=2, padx=4, pady=6)
+            tf.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=3)
+            num_lbl = tk.Label(tf, text=f"Track {i+1}", font=("Arial", 10, "bold"), fg="#FFFFFF", bg="#1C2541")
+            num_lbl.pack()
+            info_lbl = tk.Label(tf, text="Piano", font=("Arial", 8), fg="#8B949E", bg="#1C2541")
+            info_lbl.pack()
+            self.track_cards.append((tf, num_lbl, info_lbl))
+
+        # Bottom Guidance & Shortcuts Bar
+        footer_frame = tk.Frame(self.root, bg="#161B22", padx=10, pady=8)
+        footer_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=12, pady=8)
+
+        shortcuts_text = (
+            "F1: دليل الاختصارات الشامل | Space: تشغيل / إيقاف | R: تسجيل مع العد التنازلي\n"
+            "Tab / Shift+Tab: تغيير الآلة الموسيقية | F4: إعلان السرعة | F3: بندول الإيقاع | F5: شبكة الدرامز\n"
+            "Up / Down: تعديل الصوت | PageUp / PageDown: تغيير الأوكتاف | F11: تصدير WAV & MIDI | F12: لغة البرنامج"
+        )
+        footer_lbl = tk.Label(
+            footer_frame,
+            text=shortcuts_text,
+            font=("Arial", 9),
+            fg="#C9D1D9",
+            bg="#161B22",
+            justify=tk.LEFT
+        )
+        footer_lbl.pack(anchor="w")
+
+        # Key Bindings
+        self.root.bind("<KeyPress>", self._on_key_down)
+        self.root.bind("<KeyRelease>", self._on_key_up)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Welcome Speech Announcement
+        self.app.announce_welcome()
+
+        # Start periodic GUI refresh timer (40ms = 25 FPS)
+        self.root.after(40, self._refresh_loop)
+
+        # Start Tkinter event loop
+        self.root.mainloop()
+
+    def _on_key_down(self, event):
+        key_code, char_str = self._translate_key(event)
+        is_shift = bool(event.state & 0x0001)
+        is_ctrl = bool(event.state & 0x0004)
+        pygame.key.get_mods = staticmethod(lambda: (pygame.KMOD_SHIFT if is_shift else 0) | (pygame.KMOD_CTRL if is_ctrl else 0))
+
+        class TkKeyEvent:
+            def __init__(self, k, u):
+                self.key = k
+                self.unicode = u
+
+        self.app.handle_key_down(TkKeyEvent(key_code, char_str))
+
+    def _on_key_up(self, event):
+        key_code, char_str = self._translate_key(event)
+        is_shift = bool(event.state & 0x0001)
+        is_ctrl = bool(event.state & 0x0004)
+        pygame.key.get_mods = staticmethod(lambda: (pygame.KMOD_SHIFT if is_shift else 0) | (pygame.KMOD_CTRL if is_ctrl else 0))
+
+        class TkKeyEvent:
+            def __init__(self, k, u):
+                self.key = k
+                self.unicode = u
+
+        self.app.handle_key_up(TkKeyEvent(key_code, char_str))
+
+    def _translate_key(self, event):
+        keysym = event.keysym
+        char = event.char
+        # Map keysym
+        TK_MAP = {
+            "F1": pygame.K_F1, "F2": pygame.K_F2, "F3": pygame.K_F3, "F4": pygame.K_F4,
+            "F5": pygame.K_F5, "F6": pygame.K_F6, "F7": pygame.K_F7, "F8": pygame.K_F8,
+            "F9": pygame.K_F9, "F10": pygame.K_F10, "F11": pygame.K_F11, "F12": pygame.K_F12,
+            "space": pygame.K_SPACE, "Return": pygame.K_RETURN, "Escape": pygame.K_ESCAPE,
+            "Tab": pygame.K_TAB, "ISO_Left_Tab": pygame.K_TAB,
+            "Up": pygame.K_UP, "Down": pygame.K_DOWN, "Left": pygame.K_LEFT, "Right": pygame.K_RIGHT,
+            "Prior": pygame.K_PAGEUP, "Page_Up": pygame.K_PAGEUP,
+            "Next": pygame.K_PAGEDOWN, "Page_Down": pygame.K_PAGEDOWN,
+            "Home": pygame.K_HOME, "End": pygame.K_END,
+            "bracketleft": pygame.K_LEFTBRACKET, "bracketright": pygame.K_RIGHTBRACKET,
+        }
+        if keysym in TK_MAP:
+            return TK_MAP[keysym], char
+
+        if len(keysym) == 1:
+            k = ord(keysym.lower())
+            return k, keysym.lower()
+
+        if len(char) == 1:
+            return ord(char.lower()), char.lower()
+
+        return 0, ""
+
+    def _refresh_loop(self):
+        if not self._is_active or not self.root:
+            return
+
+        try:
+            seq = self.app.sequencer
+            active_idx = seq.active_track_idx
+            track = seq.tracks[active_idx]
+            inst = GM_INSTRUMENTS[track.program]
+            bar, beat = seq.get_bar_beat()
+            lang = speech.get_language()
+
+            # Status Var
+            inst_name = inst["ar"] if lang == "ar" else inst["en"]
+            self._status_var.set(f"المسار {active_idx + 1}: {inst_name} ({inst['en']})")
+
+            # Pos Var
+            self._pos_var.set(
+                f"السرعة: {seq.bpm} BPM | المازورة: {bar} | النبضة: {beat} | الأوكتاف: {self.app.keyboard.base_octave} | الشدة: {self.app.keyboard.velocity}"
+            )
+
+            # Mixer Var
+            metro_str = "مفعّل (ON)" if seq.metronome_enabled else "معطّل (OFF)"
+            vol_pct = int((track.volume / 127.0) * 100)
+            self._mixer_var.set(f"مستوى الصوت: {vol_pct}% | التوزيع: {track.pan} | المترونوم: {metro_str}")
+
+            # Mode / State Var
+            if self.app.step_sequencer.is_active:
+                step_num = self.app.step_sequencer.current_step + 1
+                drum_name = self.app.step_sequencer.instruments[self.app.step_sequencer.current_drum]["ar" if lang == "ar" else "en"]
+                self._mode_var.set(f"[نمط شبكة الدرامز 16 خطوة] الخطوة: {step_num}/16 | الآلة: {drum_name} (F5 للخروج)")
+            else:
+                state_str = "تسجيل جارٍ..." if seq.state == Sequencer.RECORDING else ("تشغيل..." if seq.state == Sequencer.PLAYING else ("عد تنازلي..." if seq.state == Sequencer.COUNTING_IN else "جاهز"))
+                self._mode_var.set(f"الحالة: {state_str} | النمط: عزف واستوديو متعدد المسارات")
+
+            # Active Notes
+            active_keys = self.app.keyboard._active_keys
+            if active_keys:
+                notes_str = ", ".join([get_note_name(n, lang) for n in active_keys.values()])
+                self._note_var.set(f"العزف المباشر: {notes_str}")
+            else:
+                self._note_var.set("العزف المباشر: جاهز | مفاتيح البيانو: Z S X D C V G B H N J M و Q 2 W 3 E R 5 T 6 Y 7 U I")
+
+            # Update 8 Track Cards
+            for i, (tf, nlbl, ilbl) in enumerate(self.track_cards):
+                t = seq.tracks[i]
+                t_inst = GM_INSTRUMENTS[t.program]["en"][:10]
+                ev_count = len(t.events) // 2
+                ilbl.config(text=f"{t_inst} ({ev_count}n)")
+                if i == active_idx:
+                    tf.config(bg="#F0B90B")
+                    nlbl.config(bg="#F0B90B", fg="#0B132B")
+                    ilbl.config(bg="#F0B90B", fg="#0B132B")
+                else:
+                    tf.config(bg="#1C2541")
+                    nlbl.config(bg="#1C2541", fg="#FFFFFF")
+                    ilbl.config(bg="#1C2541", fg="#8B949E")
+
+            self.root.after(40, self._refresh_loop)
+
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._is_active = False
+        self.app.running = False
+        if self.root:
+            self.root.destroy()
+        self.app.shutdown()
 
 
 class AccessibleDAWApp:
@@ -250,16 +534,8 @@ class AccessibleDAWApp:
 
         self.shutdown()
 
-    def run(self):
-        """Main event polling loop running at low-latency 120 FPS."""
-        if not PYGAME_AVAILABLE:
-            if sys.platform == "win32":
-                self.run_windows_console_fallback()
-                return
-            else:
-                print(f"[AccessibleDAWApp] Error: Pygame library failed to load ({PYGAME_IMPORT_ERROR}).")
-                return
-
+    def run_pygame(self):
+        """Pygame event polling loop running at low-latency 120 FPS."""
         self.setup_display()
         self.announce_welcome()
 
@@ -285,6 +561,36 @@ class AccessibleDAWApp:
                 self._render_accessible_screen()
 
         self.shutdown()
+
+    def run(self):
+        """Launches Desktop GUI (Pygame Window or Native Tkinter Desktop Window)."""
+        # 1. Try Pygame Graphical Desktop Window
+        if PYGAME_AVAILABLE:
+            try:
+                self.setup_display()
+                if not self.is_headless:
+                    self.run_pygame()
+                    return
+            except Exception as e:
+                print(f"[AccessibleDAWApp] Pygame GUI window init note: {e}")
+
+        # 2. Try Tkinter Native Desktop Window (100% built into Python standard library on Windows)
+        try:
+            print("[AccessibleDAWApp] Launching High-Contrast Tkinter Native Desktop GUI Window...")
+            tk_win = AccessibleDAWTkinterWindow(self)
+            tk_win.start()
+            return
+        except Exception as e:
+            print(f"[AccessibleDAWApp] Tkinter desktop GUI note: {e}")
+
+        # 3. Last-resort fallback for headless environments
+        if sys.platform == "win32":
+            self.run_windows_console_fallback()
+        else:
+            print("[AccessibleDAWApp] Running in headless mode.")
+            self.announce_welcome()
+            while self.running:
+                time.sleep(0.5)
 
     # -----------------------------------------------------------------------
     # Accessible Key Down Dispatcher

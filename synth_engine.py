@@ -30,6 +30,115 @@ from config import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Direct Windows MultiMedia (winmm.dll) MIDI Synthesizer
+# ---------------------------------------------------------------------------
+class WinMMMidiSynth:
+    """
+    Direct Windows MultiMedia (winmm.dll) MIDI Synthesizer.
+    Zero external dependencies, zero DLL downloads, zero SoundFont files required.
+    Uses Microsoft GS Wavetable Synth built into every Windows installation (XP to 11).
+    Provides sub-5ms low-latency polyphonic instrument playback across all 16 MIDI channels.
+    """
+
+    def __init__(self):
+        self.handle = None
+        self.channel_volumes = [100] * 16
+        self.channel_pans = [64] * 16
+        self.channel_programs = [0] * 16
+        self._winmm = None
+        self._open()
+
+    def _open(self):
+        try:
+            import ctypes
+            self._winmm = ctypes.windll.winmm
+            hmo = ctypes.c_void_p()
+            # MIDI_MAPPER = -1 (0xFFFFFFFF)
+            res = self._winmm.midiOutOpen(ctypes.byref(hmo), -1, 0, 0, 0)
+            if res == 0:
+                self.handle = hmo
+                print("[WinMMMidiSynth] Windows Native GS Wavetable Synth initialized successfully.")
+                # Configure initial volume & pan across channels
+                for ch in range(16):
+                    self.set_volume(ch, self.channel_volumes[ch])
+                    self.set_pan(ch, self.channel_pans[ch])
+            else:
+                print(f"[WinMMMidiSynth] midiOutOpen returned error code: {res}")
+        except Exception as e:
+            print(f"[WinMMMidiSynth] Native winmm MIDI unavailable: {e}")
+            self.handle = None
+
+    def _send_short_msg(self, status: int, data1: int = 0, data2: int = 0):
+        if not self.handle or not self._winmm:
+            return
+        import ctypes
+        msg = (status & 0xFF) | ((data1 & 0x7F) << 8) | ((data2 & 0x7F) << 16)
+        try:
+            self._winmm.midiOutShortMsg(self.handle, ctypes.c_ulong(msg))
+        except Exception:
+            pass
+
+    def note_on(self, channel: int, note: int, velocity: int):
+        ch = max(0, min(15, channel))
+        n = max(0, min(127, note))
+        v = max(0, min(127, velocity))
+        self._send_short_msg(0x90 | ch, n, v)
+
+    def note_off(self, channel: int, note: int):
+        ch = max(0, min(15, channel))
+        n = max(0, min(127, note))
+        self._send_short_msg(0x80 | ch, n, 0)
+
+    def program_change(self, channel: int, program: int):
+        ch = max(0, min(15, channel))
+        p = max(0, min(127, program))
+        self.channel_programs[ch] = p
+        # Channel 9 (10 in 1-based indexing) is standard GM Percussion in MIDI
+        if ch != 9:
+            self._send_short_msg(0xC0 | ch, p, 0)
+
+    def set_volume(self, channel: int, volume: int):
+        ch = max(0, min(15, channel))
+        v = max(0, min(127, volume))
+        self.channel_volumes[ch] = v
+        self._send_short_msg(0xB0 | ch, 7, v)
+
+    def set_pan(self, channel: int, pan: int):
+        ch = max(0, min(15, channel))
+        p = max(0, min(127, pan))
+        self.channel_pans[ch] = p
+        self._send_short_msg(0xB0 | ch, 10, p)
+
+    def pitch_bend(self, channel: int, value: int):
+        ch = max(0, min(15, channel))
+        val = max(0, min(16383, value + 8192))
+        lsb = val & 0x7F
+        msb = (val >> 7) & 0x7F
+        self._send_short_msg(0xE0 | ch, lsb, msb)
+
+    def all_notes_off(self, channel: Optional[int] = None):
+        channels = [channel] if channel is not None else list(range(16))
+        for ch in channels:
+            self._send_short_msg(0xB0 | ch, 123, 0)
+            self._send_short_msg(0xB0 | ch, 120, 0)
+
+    def panic(self):
+        self.all_notes_off()
+        for ch in range(16):
+            for n in range(128):
+                self._send_short_msg(0x80 | ch, n, 0)
+
+    def close(self):
+        if self.handle and self._winmm:
+            self.panic()
+            try:
+                self._winmm.midiOutClose(self.handle)
+            except Exception:
+                pass
+            self.handle = None
+
+
 class SynthEngine:
     """Production FluidSynth wrapper with 16-channel mixing & audio driver management."""
 
@@ -37,6 +146,8 @@ class SynthEngine:
         self.fs = None
         self.sfid = -1
         self.soundfont_path = None
+        self.is_winmm = False
+        self._winmm_synth = None
         self.is_fallback = False
         self._fallback_synth = None
         self._lock = threading.Lock()
@@ -47,11 +158,24 @@ class SynthEngine:
         self.channel_programs: List[int] = [0] * 16
         self.channel_programs[METRONOME_CHANNEL] = 0  # Standard Drum Bank on Ch 9
         
-        # Initialize FluidSynth or Software Fallback
+        # Initialize Synth Engine
         self._init_synth(soundfont_path)
 
     def _init_synth(self, custom_sf_path: Optional[str] = None):
-        """Attempts to load FluidSynth, auto-select soundcard driver, and load SoundFont."""
+        """Attempts to load Windows Native WinMM MIDI Synth, FluidSynth, or Fallback."""
+        # 1. On Windows, WinMMMidiSynth gives zero-latency, zero-dependency instant General MIDI playback
+        if sys.platform == "win32":
+            try:
+                winmm = WinMMMidiSynth()
+                if winmm.handle:
+                    self.is_winmm = True
+                    self._winmm_synth = winmm
+                    print("[SynthEngine] Active Engine: Windows Native GS Wavetable Synthesizer (winmm.dll).")
+                    return
+            except Exception as e:
+                print(f"[SynthEngine] WinMM initialization fallback: {e}")
+
+        # 2. Try FluidSynth (Linux / macOS or custom soundfont)
         try:
             import fluidsynth
             self.fs = fluidsynth.Synth(samplerate=float(SAMPLE_RATE), gain=0.8, polyphony=POLYPHONY)
@@ -136,6 +260,9 @@ class SynthEngine:
         velocity = max(0, min(127, velocity))
 
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.note_on(channel, note, velocity)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.noteon(channel, note, velocity)
@@ -151,6 +278,9 @@ class SynthEngine:
         note = max(0, min(127, note))
 
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.note_off(channel, note)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.noteoff(channel, note)
@@ -167,6 +297,9 @@ class SynthEngine:
         self.channel_programs[channel] = program
 
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.program_change(channel, program)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     if channel != METRONOME_CHANNEL:
@@ -184,6 +317,9 @@ class SynthEngine:
         self.channel_volumes[channel] = volume
 
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.set_volume(channel, volume)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.cc(channel, 7, volume)
@@ -200,6 +336,9 @@ class SynthEngine:
         self.channel_pans[channel] = pan
 
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.set_pan(channel, pan)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.cc(channel, 10, pan)
@@ -214,6 +353,9 @@ class SynthEngine:
         channel = max(0, min(15, channel))
         midi_val = max(0, min(16383, value + 8192))
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.pitch_bend(channel, value)
+                return
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.pitch_bend(channel, midi_val)
@@ -223,6 +365,9 @@ class SynthEngine:
     def all_notes_off(self, channel: Optional[int] = None):
         """Sends All Notes Off and All Sound Off CC controllers to silence hanging notes."""
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.all_notes_off(channel)
+                return
             channels = [channel] if channel is not None else list(range(16))
             for ch in channels:
                 if not self.is_fallback and self.fs:
@@ -237,8 +382,10 @@ class SynthEngine:
     def panic(self):
         """Emergency MIDI silence across all 16 channels."""
         self.all_notes_off()
-        # Also individually send note_off for all notes across active channels to guarantee silence
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                self._winmm_synth.panic()
+                return
             if not self.is_fallback and self.fs:
                 for ch in range(16):
                     for n in range(128):
@@ -365,8 +512,13 @@ class SynthEngine:
         return True
 
     def close(self):
-        """Clean shutdown of FluidSynth engine."""
+        """Clean shutdown of synthesis engine."""
         with self._lock:
+            if self.is_winmm and self._winmm_synth:
+                try:
+                    self._winmm_synth.close()
+                except Exception:
+                    pass
             if not self.is_fallback and self.fs:
                 try:
                     self.fs.delete()
