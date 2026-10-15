@@ -27,11 +27,13 @@ from synth_engine import SynthEngine
 from keyboard_mapper import KeyboardMapper
 from sequencer import Sequencer
 from step_sequencer import StepSequencer
+PYGAME_AVAILABLE = False
+PYGAME_IMPORT_ERROR = None
 try:
     import pygame
     PYGAME_AVAILABLE = True
-except ImportError:
-    PYGAME_AVAILABLE = False
+except Exception as err:
+    PYGAME_IMPORT_ERROR = err
     class _DummyPygame:
         class event:
             Event = object
@@ -136,12 +138,105 @@ class AccessibleDAWApp:
         welcome_text = speech.get_text("welcome")
         speech.speak(welcome_text, interrupt=True)
 
+    def run_windows_console_fallback(self):
+        """Zero-dependency Windows keyboard polling loop using GetAsyncKeyState."""
+        print(f"[AccessibleDAWApp] Pygame graphical subsystem bypassed ({PYGAME_IMPORT_ERROR}).")
+        print("[AccessibleDAWApp] Running in High-Precision Windows Native Keyboard Engine...")
+        self.announce_welcome()
+        print("\nStudio ready. Playing notes via QWERTY keyboard in Windows Native Mode.\nPress F1 for shortcuts manual.\n")
+
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+        except Exception as e:
+            print(f"[AccessibleDAWApp] Native Windows API unavailable: {e}")
+            return
+
+        VK_MAP = {
+            0x5A: ("z", pygame.K_z),
+            0x53: ("s", pygame.K_s),
+            0x58: ("x", pygame.K_x),
+            0x44: ("d", pygame.K_d),
+            0x43: ("c", pygame.K_c),
+            0x56: ("v", pygame.K_v),
+            0x47: ("g", pygame.K_g),
+            0x42: ("b", pygame.K_b),
+            0x48: ("h", pygame.K_h),
+            0x4E: ("n", pygame.K_n),
+            0x4A: ("j", pygame.K_j),
+            0x4D: ("m", pygame.K_m),
+            0x51: ("q", pygame.K_q),
+            0x32: ("2", pygame.K_2),
+            0x57: ("w", pygame.K_w),
+            0x33: ("3", pygame.K_3),
+            0x45: ("e", pygame.K_e),
+            0x52: ("r", pygame.K_r),
+            0x35: ("5", pygame.K_5),
+            0x54: ("t", pygame.K_t),
+            0x36: ("6", pygame.K_6),
+            0x59: ("y", pygame.K_y),
+            0x37: ("7", pygame.K_7),
+            0x55: ("u", pygame.K_u),
+            0x49: ("i", pygame.K_i),
+            0x20: ("space", pygame.K_SPACE),
+            0x1B: ("escape", pygame.K_ESCAPE),
+            0x21: ("pageup", pygame.K_PAGEUP),
+            0x22: ("pagedown", pygame.K_PAGEDOWN),
+            0x24: ("home", pygame.K_HOME),
+            0x23: ("end", pygame.K_END),
+            0x26: ("up", pygame.K_UP),
+            0x28: ("down", pygame.K_DOWN),
+            0x25: ("left", pygame.K_LEFT),
+            0x27: ("right", pygame.K_RIGHT),
+            0x09: ("tab", pygame.K_TAB),
+            0x4C: ("l", pygame.K_l),
+            0x4B: ("k", pygame.K_k),
+            0x31: ("1", pygame.K_1),
+            0x33: ("3", pygame.K_3),
+            0x34: ("4", pygame.K_4),
+            0x38: ("8", pygame.K_8),
+            0x70: ("f1", pygame.K_F1),
+            0x71: ("f2", pygame.K_F2),
+            0x72: ("f3", pygame.K_F3),
+            0x73: ("f4", pygame.K_F4),
+            0x74: ("f5", pygame.K_F5),
+            0x75: ("f6", pygame.K_F6),
+            0x76: ("f7", pygame.K_F7),
+            0x77: ("f8", pygame.K_F8),
+            0x78: ("f9", pygame.K_F9),
+            0x79: ("f10", pygame.K_F10),
+            0x7A: ("f11", pygame.K_F11),
+            0x7B: ("f12", pygame.K_F12),
+        }
+
+        pressed = set()
+        class KeyEvent:
+            def __init__(self, k, u=""):
+                self.key = k
+                self.unicode = u
+
+        while self.running:
+            time.sleep(0.005)
+            for vk, (char_repr, py_key) in VK_MAP.items():
+                is_down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                if is_down and vk not in pressed:
+                    pressed.add(vk)
+                    self.handle_key_down(KeyEvent(py_key, char_repr if len(char_repr) == 1 else ""))
+                elif not is_down and vk in pressed:
+                    pressed.remove(vk)
+                    self.handle_key_up(KeyEvent(py_key, char_repr if len(char_repr) == 1 else ""))
+
+        self.shutdown()
+
     def run(self):
         """Main event polling loop running at low-latency 120 FPS."""
         if not PYGAME_AVAILABLE:
-            print("[AccessibleDAWApp] Error: pygame library is not installed.")
-            print("[AccessibleDAWApp] Please install dependencies with: pip install -r requirements.txt")
-            return
+            if sys.platform == "win32":
+                self.run_windows_console_fallback()
+                return
+            else:
+                print(f"[AccessibleDAWApp] Error: Pygame library failed to load ({PYGAME_IMPORT_ERROR}).")
+                return
 
         self.setup_display()
         self.announce_welcome()

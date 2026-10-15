@@ -64,16 +64,7 @@ jobs:
       - name: Compile Executable via PyInstaller
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --onedir `
-            --name "AccessibleStudio" `
-            --add-data "soundfonts;soundfonts" `
-            --add-data "config.py;." `
-            --collect-all "pygame" `
-            --collect-all "cytolk" `
-            --collect-all "pyttsx3" `
-            --collect-all "comtypes" `
-            --hidden-import "mido" `
-            main.py
+          pyinstaller --noconfirm AccessibleStudio.spec
 
       - name: Package Portable ZIP Distribution
         shell: bash
