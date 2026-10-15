@@ -141,8 +141,9 @@ class SpeechEngine:
         # 1. CyTolk Direct C-Path (microseconds execution)
         if self._tolk is not None:
             try:
-                self._tolk.speak(clean_text, interrupt)
-                return
+                if self._tolk.has_speech():
+                    self._tolk.speak(clean_text, interrupt)
+                    return
             except Exception:
                 pass
 

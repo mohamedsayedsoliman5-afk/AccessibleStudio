@@ -591,10 +591,83 @@ class AccessibleDAWApp:
 
 
 if __name__ == "__main__":
-    # Support custom SoundFont via CLI argument
-    sf_arg = sys.argv[1] if len(sys.argv) > 1 else None
-    app = AccessibleDAWApp(soundfont_path=sf_arg)
+    import traceback
+    import datetime
+
+    # Ensure working directory is the application directory (critical for PyInstaller bundles)
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+        os.chdir(app_dir)
+        sys.path.insert(0, app_dir)
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Setup diagnostic file logger alongside console output
+    log_path = os.path.join(app_dir, "studio_debug.log")
     try:
+        log_file = open(log_path, "a", encoding="utf-8")
+        class DualLogger:
+            def __init__(self, stream, log):
+                self.stream = stream
+                self.log = log
+            def write(self, msg):
+                if self.stream:
+                    try:
+                        self.stream.write(msg)
+                    except Exception:
+                        pass
+                try:
+                    self.log.write(msg)
+                    self.log.flush()
+                except Exception:
+                    pass
+            def flush(self):
+                if self.stream:
+                    try:
+                        self.stream.flush()
+                    except Exception:
+                        pass
+                try:
+                    self.log.flush()
+                except Exception:
+                    pass
+        sys.stdout = DualLogger(sys.stdout, log_file)
+        sys.stderr = DualLogger(sys.stderr, log_file)
+    except Exception:
+        pass
+
+    print(f"\n{'=' * 60}")
+    print(f"[{datetime.datetime.now()}] AccessibleStudio Launching...")
+    print(f"Python Executable: {sys.executable}")
+    print(f"Application Directory: {app_dir}")
+    print(f"{'=' * 60}\n")
+
+    app = None
+    try:
+        sf_arg = sys.argv[1] if len(sys.argv) > 1 else None
+        app = AccessibleDAWApp(soundfont_path=sf_arg)
         app.run()
     except KeyboardInterrupt:
-        app.shutdown()
+        if app:
+            app.shutdown()
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[FATAL STARTUP ERROR]:\n{tb}")
+        crash_file = os.path.join(app_dir, "crash.log")
+        try:
+            with open(crash_file, "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"AccessibleStudio encountered a startup error:\n\n{str(e)}\n\nPlease see 'crash.log' or 'studio_debug.log' for details.",
+                    "AccessibleStudio - Error",
+                    0x10
+                )
+            except Exception:
+                pass
+        sys.exit(1)

@@ -61,13 +61,14 @@ jobs:
       - name: Compile Executable via PyInstaller
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --onedir --windowed `
+          pyinstaller --noconfirm --onedir `
             --name "AccessibleStudio" `
             --add-data "soundfonts;soundfonts" `
             --add-data "config.py;." `
-            --hidden-import "pygame" `
-            --hidden-import "cytolk" `
-            --hidden-import "pyttsx3" `
+            --collect-all "pygame" `
+            --collect-all "cytolk" `
+            --collect-all "pyttsx3" `
+            --collect-all "comtypes" `
             --hidden-import "mido" `
             main.py
 
@@ -75,6 +76,7 @@ jobs:
         shell: bash
         run: |
           cp README.md dist/AccessibleStudio/
+          cp run_debug.bat dist/AccessibleStudio/
           mkdir -p dist/AccessibleStudio/exports
           mkdir -p dist/AccessibleStudio/recordings
           cd dist
