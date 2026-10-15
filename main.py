@@ -43,14 +43,20 @@ except Exception as err:
             @staticmethod
             def get_mods(): return 0
             @staticmethod
-            def name(k): return str(k)
+            def name(k):
+                if 32 <= k <= 126:
+                    return chr(k)
+                names = {273: "up", 274: "down", 276: "left", 277: "right", 32: "space", 13: "return", 27: "escape", 280: "page up", 281: "page down", 278: "home", 279: "end"}
+                return names.get(k, str(k))
         KMOD_CTRL, KMOD_ALT, KMOD_SHIFT = 64, 256, 1
         K_F1, K_F2, K_F3, K_F4, K_F5, K_F6, K_F7, K_F8, K_F9, K_F10, K_F11, K_F12 = range(282, 294)
-        K_1, K_2, K_3, K_4, K_5, K_6, K_7, K_8 = range(49, 57)
-        K_SPACE, K_r, K_m, K_s, K_l, K_q, K_c, K_d, K_k, K_ESCAPE, K_RETURN = 32, 114, 109, 115, 108, 113, 99, 100, 107, 27, 13
+        K_SPACE = 32
+        K_RETURN = 13
+        K_ESCAPE = 27
+        K_TAB = 9
+        K_LEFTBRACKET, K_RIGHTBRACKET = 91, 93
         K_UP, K_DOWN, K_LEFT, K_RIGHT = 273, 274, 276, 277
         K_PAGEUP, K_PAGEDOWN, K_HOME, K_END = 280, 281, 278, 279
-        K_TAB, K_LEFTBRACKET, K_RIGHTBRACKET = 9, 91, 93
         QUIT, KEYDOWN, KEYUP = 12, 2, 3
         @staticmethod
         def init(): pass
@@ -66,6 +72,22 @@ except Exception as err:
         class time:
             class Clock:
                 def tick(self, fps=120): pass
+
+        def __getattr__(self, name):
+            if name.startswith("K_"):
+                suffix = name[2:]
+                if len(suffix) == 1:
+                    return ord(suffix.lower())
+            return 0
+
+    # Explicitly attach all letter keys K_a .. K_z
+    for _ch in range(ord('a'), ord('z') + 1):
+        setattr(_DummyPygame, f"K_{chr(_ch)}", _ch)
+
+    # Explicitly attach all digit keys K_0 .. K_9
+    for _ch in range(ord('0'), ord('9') + 1):
+        setattr(_DummyPygame, f"K_{chr(_ch)}", _ch)
+
     pygame = _DummyPygame()
 
 from exporter import ProjectExporter
