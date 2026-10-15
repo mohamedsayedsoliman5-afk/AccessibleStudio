@@ -9,12 +9,24 @@ class Track:
         self.track_id = track_id
         self.channel = channel
         self.program = program
-        self.volume = 105
+        self.volume = 108
         self.pan = 64
-        self.reverb = 40
+        self.reverb = 42
+        self.delay = 24
+        self.cutoff = 110
+        self.drive = 0
         self.muted = False
         self.solo = False
-        self.events = []
+        self.patterns = [[] for _ in range(4)]
+        self._active_pattern_ref = 0
+
+    @property
+    def events(self):
+        return self.patterns[self._active_pattern_ref]
+
+    @events.setter
+    def events(self, val):
+        self.patterns[self._active_pattern_ref] = val
 
 
 class Sequencer:
@@ -28,6 +40,10 @@ class Sequencer:
         self.metronome_enabled = True
         self.quantize_div_idx = 2
 
+        self.current_pattern_idx = 0
+        self.song_chain_mode = False
+        self.copied_pattern_buffer = None
+
         self.tracks = []
         for idx in range(8):
             ch = 9 if idx == 7 else idx
@@ -38,6 +54,9 @@ class Sequencer:
             self.synth.set_volume(ch, tr.volume)
             self.synth.set_pan(ch, tr.pan)
             self.synth.set_reverb(ch, tr.reverb)
+            self.synth.set_delay(ch, tr.delay)
+            self.synth.set_cutoff(ch, tr.cutoff)
+            self.synth.set_drive(ch, tr.drive)
 
         self.active_track_idx = 0
         self.state = "IDLE"
@@ -47,6 +66,30 @@ class Sequencer:
         self._open_recorded_notes = {}
         self._undo_stack = []
         self._redo_stack = []
+
+    def select_pattern(self, pat_idx: int, announce: bool = True):
+        self.synth.all_notes_off()
+        self.current_pattern_idx = pat_idx % 4
+        for tr in self.tracks:
+            tr._active_pattern_ref = self.current_pattern_idx
+        if announce:
+            pat_names = ["A (المقدمة)", "B (الكوبليه)", "C (القرار)", "D (الصولو)"]
+            self.speech.speak(f"تم الانتقال إلى المقطع الموسيقي {pat_names[self.current_pattern_idx]}")
+
+    def copy_current_pattern(self):
+        self.copied_pattern_buffer = [copy.deepcopy(tr.events) for tr in self.tracks]
+        pat_let = ["A", "B", "C", "D"][self.current_pattern_idx]
+        self.speech.speak(f"تم نسخ جميع تراكات المقطع {pat_let}")
+
+    def paste_to_current_pattern(self):
+        if not self.copied_pattern_buffer:
+            self.speech.speak("لا يوجد مقطع منسوخ في الحافظة")
+            return
+        self.push_undo_state()
+        for idx, evs in enumerate(self.copied_pattern_buffer):
+            self.tracks[idx].events = copy.deepcopy(evs)
+        pat_let = ["A", "B", "C", "D"][self.current_pattern_idx]
+        self.speech.speak(f"تم لصق التراكات في المقطع {pat_let}")
 
     @property
     def active_track(self) -> Track:
@@ -76,7 +119,7 @@ class Sequencer:
         return bar, beat
 
     def push_undo_state(self):
-        snapshot = [copy.deepcopy(tr.events) for tr in self.tracks]
+        snapshot = [[copy.deepcopy(p) for p in tr.patterns] for tr in self.tracks]
         self._undo_stack.append(snapshot)
         if len(self._undo_stack) > 32:
             self._undo_stack.pop(0)
@@ -87,12 +130,12 @@ class Sequencer:
             self.speech.play_earcon(self.synth, "boundary")
             self.speech.speak("لا توجد خطوات سابقة للتراجع عنها")
             return
-        current_snapshot = [copy.deepcopy(tr.events) for tr in self.tracks]
+        current_snapshot = [[copy.deepcopy(p) for p in tr.patterns] for tr in self.tracks]
         self._redo_stack.append(current_snapshot)
         prev_snapshot = self._undo_stack.pop()
         self.synth.all_notes_off()
-        for idx, ev_list in enumerate(prev_snapshot):
-            self.tracks[idx].events = ev_list
+        for idx, pat_list in enumerate(prev_snapshot):
+            self.tracks[idx].patterns = pat_list
         self.speech.play_earcon(self.synth, "undo")
         self.speech.speak("تم التراجع عن آخر تعديل")
 
@@ -101,12 +144,12 @@ class Sequencer:
             self.speech.play_earcon(self.synth, "boundary")
             self.speech.speak("لا توجد خطوات لاحقة للإعادة")
             return
-        current_snapshot = [copy.deepcopy(tr.events) for tr in self.tracks]
+        current_snapshot = [[copy.deepcopy(p) for p in tr.patterns] for tr in self.tracks]
         self._undo_stack.append(current_snapshot)
         next_snapshot = self._redo_stack.pop()
         self.synth.all_notes_off()
-        for idx, ev_list in enumerate(next_snapshot):
-            self.tracks[idx].events = ev_list
+        for idx, pat_list in enumerate(next_snapshot):
+            self.tracks[idx].patterns = pat_list
         self.speech.play_earcon(self.synth, "redo")
         self.speech.speak("تمت إعادة الخطوة")
 
@@ -178,6 +221,27 @@ class Sequencer:
             "time": round(pos, 5),
         })
         self.active_track.events.sort(key=lambda e: e["time"])
+
+    def toggle_piano_roll_note_at(self, track_idx: int, norm_time: float, midi_note: int):
+        self.push_undo_state()
+        tr = self.tracks[track_idx]
+        step_sec = self.beat_duration / 4.0
+        target_t = round((norm_time * self.loop_duration) / step_sec) * step_sec
+        target_end = min(self.loop_duration - 0.005, target_t + step_sec * 0.85)
+
+        for i, ev in enumerate(list(tr.events)):
+            if ev["type"] == "note_on" and ev["note"] == midi_note and abs(ev["time"] - target_t) < (step_sec * 0.5):
+                tr.events.remove(ev)
+                for off_ev in list(tr.events):
+                    if off_ev["type"] == "note_off" and off_ev["note"] == midi_note and off_ev["time"] >= target_t:
+                        tr.events.remove(off_ev)
+                        break
+                return
+
+        tr.events.append({"type": "note_on", "note": int(midi_note), "vel": 108, "time": round(target_t, 5)})
+        tr.events.append({"type": "note_off", "note": int(midi_note), "vel": 0, "time": round(target_end, 5)})
+        tr.events.sort(key=lambda e: (e["time"], 0 if e["type"] == "note_off" else 1))
+        self.synth.schedule_preview_notes(tr.channel, [(midi_note, 108, 0.0, 0.16)])
 
     def _finalize_open_recorded_notes(self, current_pos: float):
         for note, (vel, start_pos) in list(self._open_recorded_notes.items()):
@@ -269,6 +333,12 @@ class Sequencer:
             self._trigger_events_in_window(self._last_pos_sec, loop_len)
             self._finalize_open_recorded_notes(loop_len)
             self.synth.all_notes_off()
+            if self.song_chain_mode and self.state == "PLAYING":
+                for p_step in range(1, 5):
+                    cand = (self.current_pattern_idx + p_step) % 4
+                    if any(len(t.patterns[cand]) > 0 for t in self.tracks):
+                        self.select_pattern(cand, announce=False)
+                        break
             self._trigger_events_in_window(0.0, curr_pos)
         else:
             self._trigger_events_in_window(self._last_pos_sec, curr_pos)
@@ -295,6 +365,8 @@ class Sequencer:
             "metronome_enabled": self.metronome_enabled,
             "maqam_idx": self.synth.maqam_idx,
             "maqam_root": self.synth.maqam_root,
+            "current_pattern_idx": self.current_pattern_idx,
+            "song_chain_mode": self.song_chain_mode,
             "tracks": [
                 {
                     "track_id": tr.track_id,
@@ -303,16 +375,19 @@ class Sequencer:
                     "volume": tr.volume,
                     "pan": tr.pan,
                     "reverb": tr.reverb,
+                    "delay": tr.delay,
+                    "cutoff": tr.cutoff,
+                    "drive": tr.drive,
                     "muted": tr.muted,
                     "solo": tr.solo,
-                    "events": tr.events,
+                    "patterns": tr.patterns,
                 }
                 for tr in self.tracks
             ],
         }
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        self.speech.speak("تم حفظ جلسة العمل بنجاح")
+        self.speech.speak("تم حفظ المشروع بالكامل بنجاح")
 
     def load_session(self, filepath: str = config.SESSION_FILE):
         try:
@@ -323,21 +398,32 @@ class Sequencer:
             self.bars = data.get("bars", 4)
             self.loop_enabled = data.get("loop_enabled", True)
             self.metronome_enabled = data.get("metronome_enabled", True)
-            self.synth.set_maqam(data.get("maqam_idx", 0), data.get("maqam_root", 0))
+            self.song_chain_mode = data.get("song_chain_mode", False)
+            self.synth.set_maqam(data.get("maqam_idx", 1), data.get("maqam_root", 0))
             for idx, tr_data in enumerate(data.get("tracks", [])):
                 if idx < len(self.tracks):
                     tr = self.tracks[idx]
                     tr.program = tr_data.get("program", tr.program)
-                    tr.volume = tr_data.get("volume", 105)
+                    tr.volume = tr_data.get("volume", 108)
                     tr.pan = tr_data.get("pan", 64)
-                    tr.reverb = tr_data.get("reverb", 40)
+                    tr.reverb = tr_data.get("reverb", 42)
+                    tr.delay = tr_data.get("delay", 24)
+                    tr.cutoff = tr_data.get("cutoff", 110)
+                    tr.drive = tr_data.get("drive", 0)
                     tr.muted = tr_data.get("muted", False)
                     tr.solo = tr_data.get("solo", False)
-                    tr.events = tr_data.get("events", [])
+                    if "patterns" in tr_data:
+                        tr.patterns = tr_data["patterns"]
+                    elif "events" in tr_data:
+                        tr.patterns[0] = tr_data["events"]
                     self.synth.set_instrument(tr.channel, tr.program)
                     self.synth.set_volume(tr.channel, tr.volume)
                     self.synth.set_pan(tr.channel, tr.pan)
                     self.synth.set_reverb(tr.channel, tr.reverb)
+                    self.synth.set_delay(tr.channel, tr.delay)
+                    self.synth.set_cutoff(tr.channel, tr.cutoff)
+                    self.synth.set_drive(tr.channel, tr.drive)
+            self.select_pattern(data.get("current_pattern_idx", 0), announce=False)
             self.speech.speak("تم استرجاع جلسة العمل المحفوظة")
         except FileNotFoundError:
             self.speech.speak("لا يوجد ملف جلسة محفوظ مسبقاً")

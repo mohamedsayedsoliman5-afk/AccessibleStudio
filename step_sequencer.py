@@ -46,7 +46,7 @@ class StepSequencer:
             state_str = "خفيفة"
         else:
             state_str = "غير مفعلة"
-        self.synth.note_on(9, piece["note"], 105)
+        self.synth.note_on(9, piece["note"], 108)
         self.speech.speak(f"{piece['ar']}، في خطوة {self.current_step + 1} {state_str}")
 
     def toggle_step_at(self, drum_idx: int, step_idx: int):

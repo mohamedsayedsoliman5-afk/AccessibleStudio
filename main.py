@@ -1,3 +1,4 @@
+import os
 import pygame
 import config
 from speech_engine import SpeechEngine
@@ -5,6 +6,7 @@ from synth_engine import SynthEngine
 from keyboard_mapper import KeyboardMapper
 from sequencer import Sequencer
 from step_sequencer import StepSequencer
+from note_editor import AccessibleNoteEditor
 from exporter import StudioExporter
 from ui_renderer import StudioUIRenderer
 
@@ -13,8 +15,10 @@ class AccessibleStudioApp:
     def __init__(self):
         pygame.mixer.pre_init(config.SAMPLE_RATE, -16, 2, config.AUDIO_BUFFER)
         pygame.init()
-        self.screen = pygame.display.set_mode((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
-        pygame.display.set_caption(f"{config.APP_NAME} - استوديو الموسيقى الناطق للمكفوفين")
+        self.screen = pygame.display.set_mode(
+            (config.WINDOW_WIDTH, config.WINDOW_HEIGHT), pygame.RESIZABLE
+        )
+        pygame.display.set_caption(f"{config.APP_NAME} - استوديو الموسيقى الاحترافي للمكفوفين")
         self.clock = pygame.time.Clock()
 
         self.speech = SpeechEngine(lang="ar")
@@ -22,6 +26,7 @@ class AccessibleStudioApp:
         self.mapper = KeyboardMapper()
         self.sequencer = Sequencer(self.synth, self.speech)
         self.step_seq = StepSequencer(self.sequencer, self.synth, self.speech)
+        self.note_editor = AccessibleNoteEditor(self.sequencer, self.synth, self.speech)
         self.ui = StudioUIRenderer(self.screen)
 
         self.help_mode = False
@@ -29,9 +34,30 @@ class AccessibleStudioApp:
 
         engine_mode = "FluidSynth SF2" if self.synth.using_fluidsynth else "محرك التوليف الفيزيائي والشرقي المدمج"
         self.speech.speak(
-            f"مرحباً بك في {config.APP_NAME}. يعمل الآن عبر {engine_mode}. "
-            "اضغط F1 لدليل المفاتيح التفاعلي، أو ابدأ العزف مباشرة بالحروف."
+            f"مرحباً بك في {config.APP_NAME}. الصوت الناطق: {self.speech.preferred_voice_name}. "
+            f"يعمل عبر {engine_mode}. اضغط كنترول مع V لتغيير صوت الناطق، أو F1 لدليل المفاتيح."
         )
+
+    def prompt_load_sf2_file(self):
+        sf2_files = [f for f in os.listdir(".") if f.lower().endswith(".sf2")]
+        if sf2_files:
+            chosen = sf2_files[0]
+            if self.synth.load_custom_sf2(chosen):
+                self.speech.speak(f"تم تحميل ملف الساوند فونت {chosen} بنجاح")
+                return
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            path = filedialog.askopenfilename(filetypes=[("SoundFont Files", "*.sf2")])
+            root.destroy()
+            if path and self.synth.load_custom_sf2(path):
+                self.speech.speak(f"تم تحميل ملف الساوند فونت {os.path.basename(path)} بنجاح")
+                return
+        except Exception:
+            pass
+        self.speech.speak("لم يتم العثور على ملف ساوند فونت، يعمل الآن بالمحرك الشرقي المدمج")
 
     def announce_track_status(self, tr):
         if tr.channel == 9:
@@ -53,11 +79,13 @@ class AccessibleStudioApp:
         maqam_name = config.MAQAMAT[self.synth.maqam_idx]["name_ar"]
         root_name = config.NOTE_NAMES_AR[self.synth.maqam_root]
         chord_name = config.CHORD_MODES[self.mapper.chord_mode_idx]["name_ar"]
+        arp_name = config.ARP_MODES[self.mapper.arp_mode_idx]["name_ar"]
+        pat_let = ["A", "B", "C", "D"][self.sequencer.current_pattern_idx]
         note_count = len(tr.events) // 2
         self.speech.speak(
-            f"تراك {tr.track_id + 1}: {inst_name}، {maqam_name} من درجة {root_name}، "
-            f"نمط العزف {chord_name}، السرعة {self.sequencer.bpm} نبضة، "
-            f"اللوب {self.sequencer.bars} بار، النوتات {note_count}، الصوت {int(tr.volume * 100 / 127)} بالمئة"
+            f"المقطع {pat_let}، تراك {tr.track_id + 1}: {inst_name}، {maqam_name} من درجة {root_name}، "
+            f"العزف {chord_name}، أربيج {arp_name}، السرعة {self.sequencer.bpm}، "
+            f"النوتات {note_count}، الناطق {self.speech.preferred_voice_name}"
         )
 
     def handle_keydown(self, event):
@@ -80,7 +108,7 @@ class AccessibleStudioApp:
             if key_name in config.KEY_HELP_AR:
                 self.speech.speak(config.KEY_HELP_AR[key_name])
             else:
-                notes = self.mapper.get_midi_notes(key, self.sequencer.active_track.channel == 9)
+                notes = self.mapper.get_midi_notes(key, self.synth, self.sequencer.active_track.channel == 9)
                 if notes:
                     n_name = config.NOTE_NAMES_AR[notes[0] % 12]
                     octv = (notes[0] // 12) - 1
@@ -88,6 +116,68 @@ class AccessibleStudioApp:
                 else:
                     self.speech.speak(f"زر {key_name}")
             return
+
+        if ctrl and shift and key in (pygame.K_UP, pygame.K_DOWN):
+            delta = 1 if key == pygame.K_UP else -1
+            self.speech.adjust_rate(delta)
+            return
+
+        if ctrl and shift and key == pygame.K_v:
+            self.speech.toggle_screen_reader_priority()
+            return
+
+        if ctrl and key == pygame.K_v:
+            if shift:
+                self.speech.toggle_screen_reader_priority()
+            else:
+                self.speech.cycle_voice(1)
+            return
+
+        if ctrl and key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
+            pat_idx = key - pygame.K_1
+            self.sequencer.select_pattern(pat_idx)
+            return
+
+        if ctrl and key == pygame.K_c:
+            self.sequencer.copy_current_pattern()
+            return
+
+        if ctrl and key == pygame.K_p:
+            self.sequencer.paste_to_current_pattern()
+            return
+
+        if ctrl and key == pygame.K_g:
+            self.sequencer.song_chain_mode = not self.sequencer.song_chain_mode
+            st = "مفعل، سيتم عزف المقاطع بالتتابع" if self.sequencer.song_chain_mode else "متوقف، تكرار المقطع الحالي فقط"
+            self.speech.speak(f"وضع تسلسل الأغنية الكاملة {st}")
+            return
+
+        if key == pygame.K_F3 and not ctrl:
+            self.note_editor.toggle_mode()
+            return
+
+        if self.note_editor.active:
+            if key == pygame.K_LEFT:
+                if alt:
+                    self.note_editor.nudge_selected_timing(-1)
+                else:
+                    self.note_editor.navigate(-1)
+                return
+            elif key == pygame.K_RIGHT:
+                if alt:
+                    self.note_editor.nudge_selected_timing(1)
+                else:
+                    self.note_editor.navigate(1)
+                return
+            elif key == pygame.K_UP:
+                self.note_editor.transpose_selected_note(12 if ctrl else 1)
+                return
+            elif key == pygame.K_DOWN:
+                self.note_editor.transpose_selected_note(-12 if ctrl else -1)
+                return
+            elif key in (pygame.K_DELETE, pygame.K_BACKSPACE):
+                self.note_editor.delete_selected_note()
+                return
 
         if key == pygame.K_F5:
             self.step_seq.toggle_mode()
@@ -151,6 +241,23 @@ class AccessibleStudioApp:
             self.speech.speak(f"نمط العزف: {mode_info['name_ar']}")
             return
 
+        if ctrl and key == pygame.K_a:
+            arp_info = self.mapper.cycle_arp_mode(self.synth)
+            self.speech.speak(f"الأربيجيتور: {arp_info['name_ar']}")
+            return
+
+        if key == pygame.K_BACKSLASH:
+            self.mapper.scale_lock = not self.mapper.scale_lock
+            st = "مفعل على المقام الحالي" if self.mapper.scale_lock else "حر كروماتيك"
+            self.speech.speak(f"قفل السلم الموسيقي {st}")
+            return
+
+        if key == pygame.K_SLASH:
+            self.synth.tremolo_enabled = not self.synth.tremolo_enabled
+            st = "مفعل" if self.synth.tremolo_enabled else "متوقف"
+            self.speech.speak(f"الرش الشرقي التريملو {st}")
+            return
+
         if key == pygame.K_INSERT:
             self.synth.set_sustain_pedal(not self.synth.sustain_pedal)
             st = "مفعلة" if self.synth.sustain_pedal else "متوقفة"
@@ -161,7 +268,7 @@ class AccessibleStudioApp:
             self.sequencer.toggle_record()
             return
 
-        if key == pygame.K_F3 or (ctrl and key == pygame.K_t):
+        if ctrl and key == pygame.K_t:
             self.sequencer.metronome_enabled = not self.sequencer.metronome_enabled
             st = "مفعل" if self.sequencer.metronome_enabled else "متوقف"
             self.speech.speak(f"بندول الإيقاع الميترونوم {st}")
@@ -196,6 +303,7 @@ class AccessibleStudioApp:
 
         if key == pygame.K_F12:
             self.speech.lang = "en" if self.speech.lang == "ar" else "ar"
+            self.speech.save_user_settings()
             msg = "English voice active" if self.speech.lang == "en" else "تم تفعيل اللغة العربية"
             self.speech.speak(msg)
             return
@@ -248,6 +356,24 @@ class AccessibleStudioApp:
             self.synth.set_reverb(tr.channel, tr.reverb)
             pct = int(round((tr.reverb / 127.0) * 100))
             self.speech.speak(f"صدى الصوت ريفيرب لتراك {tr.track_id + 1}: {pct} بالمئة")
+            return
+
+        if alt and key in (pygame.K_HOME, pygame.K_END):
+            tr = self.sequencer.active_track
+            delta = 20 if key == pygame.K_HOME else -20
+            tr.delay = max(0, min(127, tr.delay + delta))
+            self.synth.set_delay(tr.channel, tr.delay)
+            pct = int(round((tr.delay / 127.0) * 100))
+            self.speech.speak(f"تكرار الصدى ديلاي لتراك {tr.track_id + 1}: {pct} بالمئة")
+            return
+
+        if ctrl and key in (pygame.K_UP, pygame.K_DOWN):
+            tr = self.sequencer.active_track
+            delta = 18 if key == pygame.K_UP else -18
+            tr.cutoff = max(15, min(127, tr.cutoff + delta))
+            self.synth.set_cutoff(tr.channel, tr.cutoff)
+            pct = int(round((tr.cutoff / 127.0) * 100))
+            self.speech.speak(f"فلتر تفتيح الصوت لتراك {tr.track_id + 1}: {pct} بالمئة")
             return
 
         if key == pygame.K_HOME or (shift and key == pygame.K_UP):
@@ -316,21 +442,23 @@ class AccessibleStudioApp:
 
         if not ctrl and not alt:
             tr = self.sequencer.active_track
-            notes = self.mapper.get_midi_notes(key, is_drum_track=(tr.channel == 9))
+            notes = self.mapper.get_midi_notes(key, self.synth, is_drum_track=(tr.channel == 9))
             if notes and key not in self.mapper.pressed_keys:
                 vel = self.mapper.velocity
                 self.mapper.pressed_keys[key] = (tr.channel, notes)
-                for n in notes:
-                    self.synth.note_on(tr.channel, n, vel)
-                    self.sequencer.record_note_on(n, vel)
+                if self.mapper.arp_mode_idx == 0 or tr.channel == 9:
+                    for n in notes:
+                        self.synth.note_on(tr.channel, n, vel)
+                        self.sequencer.record_note_on(n, vel)
 
     def handle_keyup(self, event):
         key = event.key
         if key in self.mapper.pressed_keys:
             ch, notes = self.mapper.pressed_keys.pop(key)
-            for n in notes:
-                self.synth.note_off(ch, n)
-                self.sequencer.record_note_off(n)
+            if self.mapper.arp_mode_idx == 0 or ch == 9:
+                for n in notes:
+                    self.synth.note_off(ch, n)
+                    self.sequencer.record_note_off(n)
 
     def run(self):
         frame_counter = 0
@@ -338,10 +466,15 @@ class AccessibleStudioApp:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                elif event.type == pygame.VIDEORESIZE:
+                    self.screen = pygame.display.set_mode((max(1024, event.w), max(680, event.h)), pygame.RESIZABLE)
+                    self.ui.screen = self.screen
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         if self.step_seq.active:
                             self.step_seq.toggle_mode()
+                        elif self.note_editor.active:
+                            self.note_editor.toggle_mode()
                         elif self.help_mode:
                             self.help_mode = False
                             self.speech.speak("تم الخروج من دليل المفاتيح")
@@ -356,8 +489,9 @@ class AccessibleStudioApp:
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     self.ui.handle_mouse_up(self)
 
+            self.mapper.update_arpeggiator(self.synth, self.sequencer)
             self.sequencer.update()
-            self.synth.update()
+            self.synth.update(self.sequencer.active_track.channel)
 
             frame_counter += 1
             if frame_counter >= 6:

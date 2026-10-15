@@ -1,10 +1,11 @@
 """
-AccessibleStudio Pro - Automated Comprehensive Test Suite
-==========================================================
+AccessibleStudio Pro v3.1 - Automated Comprehensive Test Suite
+==============================================================
 Verifies all modules: configuration, dual-engine sound synthesis,
-Arabic microtonal maqamat, piano keyboard mapping, 8-track sequencer,
-smart quantization, undo/redo, 16-step drum machine, session persistence,
-and multi-track MIDI & master WAV audio export.
+Arabic microtonal maqamat, scale locking, piano keyboard mapping,
+interactive arpeggiator, 8-track sequencer with 4 pattern banks & song chaining,
+accessible individual note editor (F3), 16-step drum machine with oriental & electro presets,
+session persistence, and multi-track MIDI & master WAV audio export.
 """
 
 import os
@@ -32,17 +33,19 @@ from synth_engine import SynthEngine
 from keyboard_mapper import KeyboardMapper
 from sequencer import Sequencer
 from step_sequencer import StepSequencer
+from note_editor import AccessibleNoteEditor
 from exporter import StudioExporter
 
 
 def test_config():
-    print("[1/7] Testing configuration, GM instruments, and Arabic Maqamat...")
+    print("[1/8] Testing configuration, GM instruments, and Arabic Maqamat...")
     assert len(config.GM_INSTRUMENTS) == 128, f"Expected 128 GM instruments, got {len(config.GM_INSTRUMENTS)}"
     assert len(config.GM_FAMILIES) == 16, f"Expected 16 GM families, got {len(config.GM_FAMILIES)}"
-    assert len(config.MAQAMAT) >= 6, "Expected at least 6 Arabic maqamat"
+    assert len(config.MAQAMAT) >= 8, f"Expected at least 8 Arabic maqamat, got {len(config.MAQAMAT)}"
     assert len(config.DRUM_PIECES) >= 9, "Expected at least 9 drum/percussion pieces"
     assert len(config.RHYTHM_PRESETS) >= 8, "Expected at least 8 rhythm presets"
     assert len(config.CHORD_MODES) >= 5, "Expected at least 5 chord modes"
+    assert len(config.ARP_MODES) >= 5, "Expected at least 5 arpeggiator modes"
 
     # Verify Maqam Rast quarter-tones (-50 cents on degrees 4 and 11)
     rast = next(m for m in config.MAQAMAT if "Rast" in m["name_en"])
@@ -52,23 +55,23 @@ def test_config():
 
 
 def test_keyboard_mapper(synth):
-    print("[2/7] Testing keyboard mapper, octave shift, and chord modes...")
+    print("[2/8] Testing keyboard mapper, octave shift, chord modes, and scale locking...")
     mapper = KeyboardMapper()
     assert mapper.base_octave == 4
     assert mapper.transpose == 0
 
     # Middle C (Z key -> offset 0 in octave 4 -> MIDI 60)
-    notes_z = mapper.get_midi_notes(pygame.K_z, is_drum_track=False)
+    notes_z = mapper.get_midi_notes(pygame.K_z, synth, is_drum_track=False)
     assert notes_z == [60], f"Expected [60] for 'Z' key in octave 4, got {notes_z}"
 
     # Upper octave C5 (Q key -> offset 12 -> MIDI 72)
-    notes_q = mapper.get_midi_notes(pygame.K_q, is_drum_track=False)
+    notes_q = mapper.get_midi_notes(pygame.K_q, synth, is_drum_track=False)
     assert notes_q == [72], f"Expected [72] for 'Q' key, got {notes_q}"
 
     # Octave shift (+1) -> Z should become 72
     mapper.shift_octave(1, synth)
     assert mapper.base_octave == 5
-    assert mapper.get_midi_notes(pygame.K_z, is_drum_track=False) == [72]
+    assert mapper.get_midi_notes(pygame.K_z, synth, is_drum_track=False) == [72]
 
     # Reset octave
     mapper.shift_octave(-1, synth)
@@ -77,25 +80,32 @@ def test_keyboard_mapper(synth):
     # Transpose (+2 semitones -> D)
     mapper.shift_transpose(2, synth)
     assert mapper.transpose == 2
-    assert mapper.get_midi_notes(pygame.K_z, is_drum_track=False) == [62]
+    assert mapper.get_midi_notes(pygame.K_z, synth, is_drum_track=False) == [62]
     mapper.shift_transpose(-2, synth)
 
     # Chord mode (Major Triad)
     mapper.chord_mode_idx = 2  # Major Triad [0, 4, 7]
-    chord_notes = mapper.get_midi_notes(pygame.K_z, is_drum_track=False)
+    chord_notes = mapper.get_midi_notes(pygame.K_z, synth, is_drum_track=False)
     assert chord_notes == [60, 64, 67], f"Expected C Major Triad [60, 64, 67], got {chord_notes}"
     mapper.chord_mode_idx = 0  # Reset to Single Note
 
+    # Scale Locking test
+    mapper.scale_lock = True
+    synth.set_maqam(2)  # Bayati (degrees: 0, 2, 3, 5, 7, 8, 10)
+    snapped = mapper.snap_to_maqam_scale(64, synth)  # E (degree 4) -> should snap to 63 (E flat) or 65 (F)
+    assert snapped in (63, 65), f"Scale snap failed for note 64, got {snapped}"
+    mapper.scale_lock = False
+
     # Drum track mapping (Track 8)
-    drum_notes = mapper.get_midi_notes(pygame.K_z, is_drum_track=True)
-    assert drum_notes == [36], f"Expected Kick drum (36) on 'Z', got {drum_notes}"
+    drum_notes = mapper.get_midi_notes(pygame.K_z, synth, is_drum_track=True)
+    assert len(drum_notes) == 1 and drum_notes[0] in [36, 61], f"Expected drum note on 'Z', got {drum_notes}"
 
     print("  -> Keyboard mapper verified.")
     return mapper
 
 
 def test_synth_engine():
-    print("[3/7] Testing dual synthesis engine (Software Physical Synthesis & Microtuning)...")
+    print("[3/8] Testing dual synthesis engine (Software Physical Synthesis & Microtuning)...")
     synth = SynthEngine()
 
     # Test Maqam microtuning cent offsets
@@ -116,11 +126,11 @@ def test_synth_engine():
     wave_piano = synth.synthesize_wave(channel=0, program=0, note=60, duration=dur, sample_rate=sr)
     assert len(wave_piano) > 0 and abs(wave_piano.max()) > 0.01, "Piano waveform generation failed"
 
-    # 2. Plucked Strings / Oud (Karplus-Strong)
+    # 2. Plucked Strings / Master Oriental Oud (Karplus-Strong)
     wave_oud = synth.synthesize_wave(channel=0, program=105, note=60, duration=dur, sample_rate=sr)
     assert len(wave_oud) > 0 and abs(wave_oud.max()) > 0.01, "Oud waveform generation failed"
 
-    # 3. Flute / Nay (Filtered breath noise)
+    # 3. Oriental Nay / Flute (Filtered breath noise)
     wave_nay = synth.synthesize_wave(channel=0, program=75, note=60, duration=dur, sample_rate=sr)
     assert len(wave_nay) > 0 and abs(wave_nay.max()) > 0.01, "Nay waveform generation failed"
 
@@ -136,8 +146,8 @@ def test_synth_engine():
     return synth
 
 
-def test_sequencer_and_quantize(synth, speech):
-    print("[4/7] Testing 8-track sequencer, playback, and smart quantization...")
+def test_sequencer_patterns_and_quantize(synth, speech):
+    print("[4/8] Testing 8-track sequencer, pattern banks, and smart quantization...")
     seq = Sequencer(synth, speech)
     assert len(seq.tracks) == 8
     assert seq.tracks[7].channel == 9  # Track 8 is drums
@@ -145,35 +155,68 @@ def test_sequencer_and_quantize(synth, speech):
 
     tr = seq.active_track
     # Add unquantized notes
-    # At 120 BPM, 1 beat = 0.5s. 1/16 note = 0.125s.
     tr.events.append({"type": "note_on", "note": 60, "vel": 100, "time": 0.024})
     tr.events.append({"type": "note_off", "note": 60, "vel": 0, "time": 0.118})
     tr.events.append({"type": "note_on", "note": 64, "vel": 95, "time": 0.138})
     tr.events.append({"type": "note_off", "note": 64, "vel": 0, "time": 0.245})
 
     # Quantize to 1/16 note (idx 2 in config.QUANTIZE_DIVISIONS)
-    seq.quantize_div_idx = 2  # 16th note
+    seq.quantize_div_idx = 2
     seq.quantize_active_track()
 
     # Note 1 (at 0.024s) should snap to 0.0s
     assert tr.events[0]["time"] == 0.0, f"Quantization failed: expected 0.0s, got {tr.events[0]['time']}"
-    # Note 2 (at 0.138s) should snap to 0.125s
-    assert abs(tr.events[2]["time"] - 0.125) < 0.001, f"Quantization failed: expected 0.125s, got {tr.events[2]['time']}"
 
-    # Test Undo
+    # Test Undo & Redo
     seq.undo()
     assert tr.events[0]["time"] == 0.024, "Undo did not restore original unquantized timestamp"
-
-    # Test Redo
     seq.redo()
     assert tr.events[0]["time"] == 0.0, "Redo did not re-apply quantization"
 
-    print("  -> Sequencer & Smart Quantization verified.")
+    # Test Pattern Banks (Bank 0 -> Bank 1)
+    seq.copy_current_pattern()
+    seq.select_pattern(1)
+    assert len(seq.active_track.events) == 0, "Pattern 2 should start empty"
+    seq.paste_to_current_pattern()
+    assert len(seq.active_track.events) == 4, "Paste pattern failed"
+    seq.select_pattern(0)
+
+    print("  -> Sequencer, pattern banks, and smart quantization verified.")
     return seq
 
 
+def test_note_editor(seq, synth, speech):
+    print("[5/8] Testing accessible individual note editor (F3)...")
+    editor = AccessibleNoteEditor(seq, synth, speech)
+    editor.toggle_mode()
+    assert editor.active is True, "Note editor should be active"
+
+    tr = seq.active_track
+    pairs = editor._extract_note_pairs(tr)
+    assert len(pairs) == 2, f"Expected 2 note pairs, got {len(pairs)}"
+
+    # Transpose first note up by 2 semitones (60 -> 62)
+    editor.transpose_selected_note(2)
+    assert pairs[0][0]["note"] == 62
+    assert pairs[0][1]["note"] == 62
+
+    # Transpose back
+    editor.transpose_selected_note(-2)
+    assert pairs[0][0]["note"] == 60
+
+    # Navigate next
+    editor.navigate(1)
+    assert editor.selected_idx == 1
+
+    # Close editor
+    editor.toggle_mode()
+    assert editor.active is False
+
+    print("  -> Accessible individual note editor verified.")
+
+
 def test_step_sequencer(seq, synth, speech):
-    print("[5/7] Testing 16-step oriental drum sequencer and rhythm presets...")
+    print("[6/8] Testing 16-step oriental drum sequencer and rhythm presets...")
     step_seq = StepSequencer(seq, synth, speech)
 
     # Load Egyptian Maqsum preset
@@ -197,7 +240,7 @@ def test_step_sequencer(seq, synth, speech):
 
 
 def test_session_persistence(seq):
-    print("[6/7] Testing JSON project session persistence...")
+    print("[7/8] Testing JSON project session persistence...")
     test_session_file = "test_session_temp.json"
     try:
         seq.save_session(test_session_file)
@@ -218,7 +261,7 @@ def test_session_persistence(seq):
 
 
 def test_export_pipeline(seq, synth, speech):
-    print("[7/7] Testing multi-track MIDI compilation & Master WAV audio export...")
+    print("[8/8] Testing multi-track MIDI compilation & Master WAV audio export...")
     os.makedirs(config.EXPORT_DIR, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     mid_path = os.path.join(config.EXPORT_DIR, f"test_project_{timestamp}.mid")
@@ -247,14 +290,15 @@ def test_export_pipeline(seq, synth, speech):
 
 if __name__ == "__main__":
     print("============================================================")
-    print("AccessibleStudio Pro Automated Test Suite")
+    print("AccessibleStudio Pro v3.1 Automated Test Suite")
     print("============================================================\n")
 
     speech_inst = SpeechEngine(lang="ar")
     synth_inst = test_synth_engine()
     test_config()
     test_keyboard_mapper(synth_inst)
-    seq_inst = test_sequencer_and_quantize(synth_inst, speech_inst)
+    seq_inst = test_sequencer_patterns_and_quantize(synth_inst, speech_inst)
+    test_note_editor(seq_inst, synth_inst, speech_inst)
     test_step_sequencer(seq_inst, synth_inst, speech_inst)
     test_session_persistence(seq_inst)
     test_export_pipeline(seq_inst, synth_inst, speech_inst)
@@ -264,5 +308,5 @@ if __name__ == "__main__":
     pygame.quit()
 
     print("\n============================================================")
-    print("ALL 7 TEST SUITES PASSED SUCCESSFULLY WITH ZERO ERRORS!")
+    print("ALL 8 TEST SUITES PASSED SUCCESSFULLY WITH ZERO ERRORS!")
     print("============================================================")

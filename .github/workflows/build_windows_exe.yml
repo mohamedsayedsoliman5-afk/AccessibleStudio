@@ -55,6 +55,44 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Download Audio & Accessibility DLLs and SoundFont
+        shell: pwsh
+        run: |
+          Write-Host "Downloading FluidSynth v2.6.1 Windows x64..."
+          try {
+              Invoke-WebRequest -Uri "https://github.com/FluidSynth/fluidsynth/releases/download/v2.6.1/fluidsynth-v2.6.1-win10-x64-cpp11.zip" -OutFile "fluidsynth.zip" -TimeoutSec 45
+              Expand-Archive -Path "fluidsynth.zip" -DestinationPath "fluidsynth_temp"
+              Get-ChildItem -Path "fluidsynth_temp" -Filter "*.dll" -Recurse | ForEach-Object { Copy-Item $_.FullName . -Force }
+              Write-Host "FluidSynth DLLs unpacked successfully."
+          } catch {
+              Write-Host "Warning: FluidSynth download fallback: $_"
+          }
+
+          Write-Host "Extracting NVDA Controller Client DLLs from cytolk..."
+          try {
+              $cytolkDir = python -c "import cytolk, os; print(os.path.dirname(cytolk.__file__))"
+              if (Test-Path "$cytolkDir\nvdaControllerClient64.dll") {
+                  Copy-Item "$cytolkDir\nvdaControllerClient64.dll" . -Force
+                  Write-Host "nvdaControllerClient64.dll copied."
+              }
+              if (Test-Path "$cytolkDir\SAAPI64.dll") {
+                  Copy-Item "$cytolkDir\SAAPI64.dll" . -Force
+                  Write-Host "SAAPI64.dll copied."
+              }
+          } catch {
+              Write-Host "Warning: cytolk DLL copy fallback: $_"
+          }
+
+          Write-Host "Downloading General MIDI SoundFont (default.sf2)..."
+          try {
+              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wrightflyer/SF2_SoundFonts/master/GeneralUser%20GS%20v1.471.sf2" -OutFile "default.sf2" -TimeoutSec 60
+              Write-Host "SoundFont default.sf2 downloaded successfully."
+          } catch {
+              Write-Host "Warning: SoundFont download fallback: $_"
+          }
+
+          Get-ChildItem -Filter "*.dll" | Select-Object Name
+
       - name: Compile Executable via PyInstaller
         shell: pwsh
         run: |
@@ -65,9 +103,11 @@ jobs:
             --collect-all "mido" `
             --collect-all "pyttsx3" `
             --collect-all "comtypes" `
+            --collect-all "cytolk" `
             --hidden-import "speech_engine" `
             --hidden-import "synth_engine" `
             --hidden-import "keyboard_mapper" `
+            --hidden-import "note_editor" `
             --hidden-import "sequencer" `
             --hidden-import "step_sequencer" `
             --hidden-import "exporter" `
@@ -81,8 +121,10 @@ jobs:
       - name: Package Portable ZIP Distribution
         shell: bash
         run: |
-          cp README.md dist/AccessibleStudio/
-          cp run_debug.bat dist/AccessibleStudio/
+          cp -f *.dll dist/AccessibleStudio/ 2>/dev/null || true
+          cp -f default.sf2 dist/AccessibleStudio/ 2>/dev/null || true
+          cp -f README.md dist/AccessibleStudio/
+          cp -f run_debug.bat dist/AccessibleStudio/
           mkdir -p dist/AccessibleStudio/exports
           mkdir -p dist/AccessibleStudio/recordings
           cd dist
