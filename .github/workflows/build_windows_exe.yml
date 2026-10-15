@@ -1,0 +1,97 @@
+name: Build AccessibleStudio Standalone Executable
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Automated Tests (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Studio Test Suite
+        run: |
+          python test_studio.py
+
+  build-windows:
+    name: Build Windows Standalone Package
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Prepare Assets & Default SoundFont
+        shell: bash
+        run: |
+          mkdir -p soundfonts
+          # Download lightweight General MIDI soundfont if not bundled
+          curl -L -s -o soundfonts/default.sf2 "https://raw.githubusercontent.com/urish/cinto/master/media/GeneralUser_GS.sf2" || true
+
+      - name: Compile Executable via PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "AccessibleStudio" `
+            --add-data "soundfonts;soundfonts" `
+            --add-data "config.py;." `
+            --hidden-import "pygame" `
+            --hidden-import "cytolk" `
+            --hidden-import "pyttsx3" `
+            --hidden-import "mido" `
+            main.py
+
+      - name: Package Portable ZIP Distribution
+        shell: bash
+        run: |
+          cp README.md dist/AccessibleStudio/
+          mkdir -p dist/AccessibleStudio/exports
+          mkdir -p dist/AccessibleStudio/recordings
+          cd dist
+          7z a -tzip AccessibleStudio-Windows-x64.zip AccessibleStudio/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AccessibleStudio-Windows-x64
+          path: dist/AccessibleStudio-Windows-x64.zip
+          retention-days: 30
+
+      - name: Create GitHub Release (On Tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/AccessibleStudio-Windows-x64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true

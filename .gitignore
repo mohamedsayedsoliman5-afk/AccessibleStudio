@@ -1,0 +1,28 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller Build Output
+build/
+dist/
+*.spec
+
+# Exported Audio and MIDI session files
+exports/*.wav
+exports/*.mid
+recordings/*.wav
+recordings/*.mid
+
+# IDE & OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
