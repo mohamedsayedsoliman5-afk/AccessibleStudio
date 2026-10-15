@@ -3,7 +3,7 @@
 
 A production-ready, screen-reader-first Desktop Digital Audio Workstation (DAW) and Live Instrument Studio engineered specifically for blind and visually impaired musicians.
 
-Built with Python 3.10+, Pygame, FluidSynth (16 MIDI Channels), CyTolk (NVDA/JAWS/SAPI direct bridge), and Mido.
+Built with Python 3.10+, Native Windows Desktop GUI (Tkinter), Windows Multimedia MIDI (WinMM - Microsoft GS Wavetable Synth), CyTolk (NVDA/JAWS/SAPI direct bridge), and Mido.
 
 ---
 

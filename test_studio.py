@@ -1,30 +1,30 @@
 """
-Automated Test Suite for Accessible Mini-DAW Studio
-===================================================
-Verifies all modules, mathematical quantization, musical keyboard mapping,
-multi-track sequencing, drum grid presets, and file export operations.
+Automated Test Suite for AccessibleStudio DAW v2.0
+==================================================
+Verifies all modular engines: configuration, piano keyboard mapping,
+multi-track sequencing, smart quantization, undo/redo, drum grid presets,
+MIDI compilation, and master WAV rendering.
 """
 
 import os
 import sys
 import time
 
-# Ensure blind_daw is on sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import (
+from accessible_studio.config import (
     GM_INSTRUMENTS,
     GM_DRUMS,
     STEP_DRUM_INSTRUMENTS,
     STRINGS,
     get_note_name
 )
-from speech_engine import speech
-from synth_engine import SynthEngine
-from keyboard_mapper import KeyboardMapper
-from sequencer import Sequencer, Track
-from step_sequencer import StepSequencer
-from exporter import ProjectExporter
+from accessible_studio.accessibility.speech import speech
+from accessible_studio.accessibility.piano_keys import PianoKeyboardMapper
+from accessible_studio.core.midi_synth import MidiSynthEngine
+from accessible_studio.core.sequencer import Sequencer, Track
+from accessible_studio.core.drum_grid import DrumGridSequencer
+from accessible_studio.core.exporter import ProjectExporter
 
 
 def test_config():
@@ -38,177 +38,163 @@ def test_config():
 
 
 def test_keyboard_mapper():
-    print("[2/7] Testing keyboard mapper & anti-repeat debounce...")
-    km = KeyboardMapper(base_octave=4, base_velocity=100)
-    
+    print("[2/7] Testing piano keyboard mapper & debounce...")
+    km = PianoKeyboardMapper(base_octave=4, base_velocity=100)
+
     # Test Middle C (Z -> MIDI 60)
-    note_vel = km.process_key_down(122, "z")
+    note_vel = km.process_key_down("z", "z")
     assert note_vel is not None
     note, vel = note_vel
     assert note == 60, f"Expected MIDI 60 for 'z', got {note}"
     assert vel == 100
 
     # Test auto-repeat suppression (same key while held)
-    rep = km.process_key_down(122, "z")
+    rep = km.process_key_down("z", "z")
     assert rep is None, "Failed to suppress OS key repeat!"
 
     # Test release
-    rel_note = km.process_key_up(122)
+    rel_note = km.process_key_up("z")
     assert rel_note == 60, f"Expected release note 60, got {rel_note}"
 
     # Test Upper Octave (Q -> MIDI 72 = C5)
-    note_vel_q = km.process_key_down(113, "q")
+    note_vel_q = km.process_key_down("q", "q")
     assert note_vel_q is not None and note_vel_q[0] == 72, f"Expected MIDI 72 for 'q', got {note_vel_q}"
-    km.process_key_up(113)
+    km.process_key_up("q")
 
     # Test Octave Shifting
     new_oct, changed = km.octave_up()
     assert changed and new_oct == 5
-    note_vel_z5 = km.process_key_down(122, "z")
-    assert note_vel_z5[0] == 72  # Z shifted up by 1 octave
-    km.process_key_up(122)
+    note_vel_z5 = km.process_key_down("z", "z")
+    assert note_vel_z5[0] == 72
+    km.process_key_up("z")
 
     # Reset
     km.octave_down()
-    print("  -> Keyboard mapper passed.")
+    print("  -> Piano keyboard mapper passed.")
 
 
 def test_synth_engine():
-    print("[3/7] Testing synthesis engine & mixing...")
-    synth = SynthEngine()
-    # Test channels, volume, pan
+    print("[3/7] Testing MIDI synthesis engine & mixing...")
+    synth = MidiSynthEngine()
     synth.set_volume(0, 95)
     synth.set_pan(0, 30)
-    synth.program_change(0, 4)  # Rhodes
+    synth.program_change(0, 4)  # Rhodes Electric Piano
     synth.note_on(0, 60, 100)
     synth.note_off(0, 60)
     synth.panic()
-    print("  -> Synth engine passed.")
+    print("  -> MIDI synthesis engine passed.")
     return synth
 
 
 def test_sequencer_quantization_undo(synth):
-    print("[4/7] Testing sequencer, smart quantization, and undo...")
-    seq = Sequencer(synth)
-    seq.bpm = 120  # 1 beat = 500ms, 1/16th note = 125ms
+    print("[4/7] Testing multi-track sequencer, smart quantization, and undo...")
+    seq = Sequencer(synth, num_tracks=8)
+    seq.bpm = 120
     track = seq.tracks[0]
 
-    # Insert intentionally unquantized notes
-    # Target 16th grid lines are 0ms, 125ms, 250ms, 375ms, 500ms
-    # Note 1: played at 23ms (should snap to 0ms)
     track.add_event("note_on", 60, 100, 23.0)
     track.add_event("note_off", 60, 0, 110.0)
-    
-    # Note 2: played at 138ms (should snap to 125ms)
-    track.add_event("note_on", 64, 100, 138.0)
+    track.add_event("note_on", 64, 90, 132.0)
     track.add_event("note_off", 64, 0, 240.0)
 
-    # Note 3: played at 265ms (should snap to 250ms)
-    track.add_event("note_on", 67, 100, 265.0)
-    track.add_event("note_off", 67, 0, 360.0)
-
-    # Apply smart quantization at 1/16th division
+    # Quantize to 16th grid (snap to multiples of 125ms: 0ms, 125ms...)
     seq.quantize_track(0, grid_division=16)
 
-    # Check that note_on events are now on exact grid lines
-    on_events = [e for e in track.events if e[0] == "note_on"]
-    assert len(on_events) == 3
-    assert on_events[0][3] == 0.0, f"Expected 0.0ms, got {on_events[0][3]}"
-    assert on_events[1][3] == 125.0, f"Expected 125.0ms, got {on_events[1][3]}"
-    assert on_events[2][3] == 250.0, f"Expected 250.0ms, got {on_events[2][3]}"
+    # Note 1 should snap to 0.0ms
+    assert track.events[0][3] == 0.0, f"Quantization failed: expected 0.0, got {track.events[0][3]}"
+    # Note 2 should snap to 125.0ms
+    assert track.events[2][3] == 125.0, f"Quantization failed: expected 125.0, got {track.events[2][3]}"
 
     # Test Undo
-    assert seq.undo_active_track() is None or True
-    # Verify original unquantized timestamps were restored
-    restored_on = [e for e in track.events if e[0] == "note_on"]
-    assert restored_on[0][3] == 23.0, f"Expected 23.0ms after undo, got {restored_on[0][3]}"
+    assert seq.undo_active_track() is True, "Undo failed!"
+    assert track.events[0][3] == 23.0, "Undo did not restore original unquantized timestamp!"
+
+    seq.close()
     print("  -> Sequencer & Smart Quantization passed.")
-    return seq
 
 
-def test_step_sequencer(synth, seq):
-    print("[5/7] Testing 16-step drum grid sequencer & rhythmic presets...")
-    step_seq = StepSequencer(synth)
-    
-    # Toggle on
-    assert step_seq.toggle_mode() is True
-    
-    # Test step and drum navigation
-    step_seq.move_step(1)
-    assert step_seq.current_step == 1
-    step_seq.move_drum(1)
-    assert step_seq.current_drum == 1
+def test_drum_grid(synth):
+    print("[5/7] Testing 16-step rhythmic drum sequencer & presets...")
+    drums = DrumGridSequencer(synth)
 
-    # Toggle hit on
-    step_seq.toggle_current_hit()
-    assert step_seq.grid[1][1] is True
+    # Toggle hit on step 0
+    drums.toggle_current_hit()
+    assert drums.grid[0][0] is True
+    drums.toggle_current_hit()
+    assert drums.grid[0][0] is False
 
-    # Test Maqsum oriental preset
-    step_seq.load_preset("maqsum")
-    # Verify Dum hits on steps 0 and 8
-    assert step_seq.grid[6][0] is True
-    assert step_seq.grid[6][8] is True
+    # Load Arabic Maqsum preset
+    assert drums.load_preset("maqsum") is True
+    assert drums.grid[0][0] is True  # Dum on beat 1
+    assert drums.grid[1][4] is True  # Tak on beat 2
 
-    # Render to track events
-    events = step_seq.render_to_track_events(bpm=120, bars=2)
-    assert len(events) > 10, "Expected generated MIDI drum events"
-    print("  -> Step Sequencer passed.")
+    # Render to MIDI events
+    events = drums.render_to_track_events(bpm=120.0, bars=2)
+    assert len(events) > 0, "No events generated from drum pattern!"
+    assert events[0][0] == "note_on"
+    print("  -> Drum Grid passed.")
 
 
-def test_exporter(seq, synth):
+def test_export(synth):
     print("[6/7] Testing multi-track MIDI compilation and WAV audio export...")
-    # Add a melody to track 0
-    t0 = seq.tracks[0]
-    t0.clear()
-    t0.program = 0  # Grand Piano
-    t0.add_event("note_on", 60, 100, 0.0)
-    t0.add_event("note_off", 60, 0, 400.0)
-    t0.add_event("note_on", 64, 100, 500.0)
-    t0.add_event("note_off", 64, 0, 900.0)
-    t0.add_event("note_on", 67, 100, 1000.0)
-    t0.add_event("note_off", 67, 0, 1400.0)
+    seq = Sequencer(synth, num_tracks=8)
+    seq.bpm = 120
 
-    # Add bass to track 1
-    t1 = seq.tracks[1]
-    t1.clear()
-    t1.program = 33  # Finger Bass
-    t1.add_event("note_on", 36, 110, 0.0)
-    t1.add_event("note_off", 36, 0, 800.0)
-    t1.add_event("note_on", 43, 110, 1000.0)
-    t1.add_event("note_off", 43, 0, 1800.0)
+    # Add musical phrase on Track 1 (Piano)
+    t1 = seq.tracks[0]
+    t1.program = 0
+    t1.add_event("note_on", 60, 100, 0.0)
+    t1.add_event("note_off", 60, 0, 250.0)
+    t1.add_event("note_on", 64, 100, 250.0)
+    t1.add_event("note_off", 64, 0, 500.0)
+    t1.add_event("note_on", 67, 100, 500.0)
+    t1.add_event("note_off", 67, 0, 1000.0)
+
+    # Add drums on Track 2 (Drums)
+    drums = DrumGridSequencer(synth)
+    drums.load_preset("maqsum")
+    t2 = seq.tracks[1]
+    t2.channel = 9
+    t2.events = drums.render_to_track_events(bpm=120.0, bars=1)
 
     exporter = ProjectExporter(seq, synth)
-    success, mid_path, wav_path = exporter.export_project()
+    test_base = f"Test_Export_{int(time.time())}"
+    midi_file = os.path.join("exports", f"{test_base}.mid")
+    wav_file = os.path.join("exports", f"{test_base}.wav")
 
-    assert success is True, "Export failed!"
-    assert os.path.exists(mid_path), f"MIDI file not found at {mid_path}"
-    assert os.path.getsize(mid_path) > 50, "MIDI file too small"
-    assert os.path.exists(wav_path), f"WAV file not found at {wav_path}"
-    assert os.path.getsize(wav_path) > 500, "WAV file too small"
-    print(f"  -> Export passed. Generated: {os.path.basename(mid_path)} ({os.path.getsize(mid_path)} bytes) & {os.path.basename(wav_path)} ({os.path.getsize(wav_path)} bytes)")
+    exporter._save_midi(midi_file)
+    assert os.path.exists(midi_file) and os.path.getsize(midi_file) > 100, "MIDI export failed!"
+
+    exporter._save_wav(midi_file, wav_file)
+    assert os.path.exists(wav_file) and os.path.getsize(wav_file) > 1000, "WAV export failed!"
+
+    seq.close()
+    print(f"  -> Export passed. Generated: {os.path.basename(midi_file)} ({os.path.getsize(midi_file)} bytes) & {os.path.basename(wav_file)} ({os.path.getsize(wav_file)} bytes)")
 
 
-def test_speech_and_earcons():
-    print("[7/7] Testing speech engine & earcons...")
-    speech.speak("اختبار نطق شاشة التوقف", interrupt=True)
-    speech.play_earcon("rec_start")
+def test_speech_and_earcons(synth):
+    print("[7/7] Testing speech engine & Earcons...")
+    speech.set_synth_callbacks(synth.note_on, synth.note_off)
+    speech.play_earcon("play")
+    speech.play_earcon("stop")
+    speech.play_earcon("record")
+    speech.play_earcon("boundary")
     speech.play_earcon("quantize")
-    time.sleep(0.2)
-    print("  -> Speech and earcon cues passed.")
+
+    speech.speak("اختبار نطق شاشة التوقف", interrupt=True)
+    time.sleep(0.1)
+    speech.shutdown()
+    print("  -> Speech and Earcon cues passed.")
 
 
 if __name__ == "__main__":
-    print("Starting Accessible Mini-DAW Test Suite...\n")
+    print("Starting AccessibleStudio v2.0 Test Suite...\n")
     test_config()
     test_keyboard_mapper()
-    synth_obj = test_synth_engine()
-    seq_obj = test_sequencer_quantization_undo(synth_obj)
-    test_step_sequencer(synth_obj, seq_obj)
-    test_exporter(seq_obj, synth_obj)
-    test_speech_and_earcons()
-    
-    # Cleanup
-    seq_obj.close()
-    synth_obj.close()
-    speech.shutdown()
+    synth_inst = test_synth_engine()
+    test_sequencer_quantization_undo(synth_inst)
+    test_drum_grid(synth_inst)
+    test_export(synth_inst)
+    test_speech_and_earcons(synth_inst)
+    synth_inst.close()
     print("\nALL 7 TEST SUITES PASSED PERFECTLY WITH ZERO ERRORS!")

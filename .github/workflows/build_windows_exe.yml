@@ -51,25 +51,15 @@ jobs:
       - name: Install Dependencies & PyInstaller
         run: |
           python -m pip install --upgrade pip
-          pip install pygame-ce
           pip install -r requirements.txt
           pip install pyinstaller
-
-      - name: Prepare Assets & Default SoundFont
-        shell: bash
-        run: |
-          mkdir -p soundfonts
-          # Download lightweight General MIDI soundfont if not bundled
-          curl -L -s -o soundfonts/default.sf2 "https://raw.githubusercontent.com/urish/cinto/master/media/GeneralUser_GS.sf2" || true
 
       - name: Compile Executable via PyInstaller
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onedir --windowed `
             --name "AccessibleStudio" `
-            --add-data "soundfonts;soundfonts" `
-            --add-data "config.py;." `
-            --collect-all "pygame" `
+            --collect-all "accessible_studio" `
             --collect-all "tkinter" `
             --collect-all "cytolk" `
             --collect-all "pyttsx3" `

@@ -1,15 +1,11 @@
-# Core Event Loop & Input Polling
-pygame-ce>=2.5.0
-
-# Audio Synthesis & SoundFont Mixing Engine
-pyfluidsynth>=1.3.0
-numpy>=1.24.0
+# AccessibleStudio v2.0 Dependencies
+# Zero SDL/Pygame dependencies - 100% Native Windows GUI & WinMM Audio
 
 # MIDI File Creation & Multi-track Sequencing
 mido>=1.3.0
+numpy>=1.24.0
 
-# Screen Reader & Accessibility Bridge
-# Direct C-bindings to Tolk (NVDA, JAWS, SAPI) for Windows
+# Screen Reader & Accessibility Bridge (NVDA, JAWS, SAPI)
 cytolk>=0.1.25; sys_platform == "win32"
 comtypes>=1.2.0; sys_platform == "win32"
 
