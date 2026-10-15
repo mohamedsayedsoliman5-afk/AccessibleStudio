@@ -158,6 +158,8 @@ def test_export(synth):
     t2.events = drums.render_to_track_events(bpm=120.0, bars=1)
 
     exporter = ProjectExporter(seq, synth)
+    os.makedirs("exports", exist_ok=True)
+    os.makedirs("recordings", exist_ok=True)
     test_base = f"Test_Export_{int(time.time())}"
     midi_file = os.path.join("exports", f"{test_base}.mid")
     wav_file = os.path.join("exports", f"{test_base}.wav")

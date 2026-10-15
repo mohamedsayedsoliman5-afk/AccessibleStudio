@@ -32,6 +32,7 @@ jobs:
 
       - name: Run Studio Test Suite
         run: |
+          mkdir -p exports recordings
           python test_studio.py
 
   build-windows:
